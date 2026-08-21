@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>ひらがなスロット</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=M+PLUS+1p:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:    #17171A;   /* 黒。線と文字はすべてこれ */
+    --paper:  #E9E7E2;   /* 地 */
+    --body:   #D2D1CC;   /* 筐体 */
+    --panel:  #E2E1DC;   /* 操作パネル */
+    --screen: #0B0B0C;   /* 表示面 */
+    --reel-font: 'M PLUS 1p', 'Hiragino Sans', sans-serif;
+    --mono: ui-monospace, 'SF Mono', 'Courier New', monospace;
+  }
+  *{ box-sizing: border-box; }
+  html,body{
+    margin:0; padding:0;
+    width:100%; height:100%;
+    overflow:hidden;            /* 縦スクロールさせない */
+    background: var(--paper);
+    font-family: var(--mono);
+    color: var(--ink);
+    -webkit-tap-highlight-color: transparent;
+  }
+  body{
+    position: fixed;          /* iOSのゴムバウンドも止める */
+    inset: 0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+
+  /* 設計サイズは固定。画面に合わせてJSがまるごと拡大縮小する */
+  .stage{
+    width: 430px;
+    flex: 0 0 auto;
+    position: relative;
+    transform-origin: center center;
+  }
+
+  /* ============ 筐体 ============
+     グラデーション・影・ツヤ・丸みは使わない。
+     面はベタ塗り、境目は1pxの線だけ。 */
+  .machine{
+    position: relative;
+    width: 100%;
+    background: var(--body);
+    border: 1px solid var(--ink);
+    border-radius: 2px;
+    padding: 0 16px 16px;
+  }
+
+  /* ============ 上部インジケータ ============ */
+  .crown{
+    position: relative;
+    height: 24px;
+    margin: 0 -16px 12px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--ink);
+    display:flex;
+    align-items:center;
+    gap: 8px;
+  }
+  .crown-lamp{
+    width: 9px; height: 9px;
+    border: 1px solid var(--ink);
+    background: transparent;
+    transition: background 0.1s linear;
+  }
+  .crown-lamp.on{ background: var(--ink); }
+  .machine.jackpot .crown-lamp{ animation: lampMono 2.2s steps(1) infinite; }
+  @keyframes lampMono{
+    0%,62%{ background: var(--ink); }
+    63%,100%{ background: transparent; }
+  }
+
+  /* ============ 表示面 ============ */
+  .lcd{
+    position: relative;
+    height: 132px;
+    background: var(--screen);
+    border: 1px solid var(--ink);
+    margin-bottom: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    user-select: none;
+  }
+  .lcd::after{  /* 走査線だけ。映り込みは描かない */
+    content:'';
+    position:absolute; inset:0;
+    background: repeating-linear-gradient(180deg, rgba(0,0,0,0.28) 0 1px, transparent 1px 3px);
+    pointer-events:none;
+    z-index: 8;
+  }
+
+  .lcd-layer{
+    position:absolute; inset:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    transition: opacity 0.2s ease;
+  }
+  .lcd-layer.hidden{ opacity: 0; pointer-events:none; }
+
+  .lcd-word{ display:flex; gap: 14px; }
+  .lcd-word span{
+    font-family: var(--reel-font);
+    font-weight: 900;
+    font-size: 44px;
+    line-height: 1;
+    color: #E9E7E2;
+    animation: wordIn 0.22s ease-out both;
+  }
+  .lcd-word span:nth-child(2){ animation-delay: .06s; }
+  .lcd-word span:nth-child(3){ animation-delay: .12s; }
+  @keyframes wordIn{ from{ opacity:0 } to{ opacity:1 } }
+
+  /* ============ 演出（3文字揃ったときだけ・白黒） ============ */
+  .fx{
+    position:absolute; inset:0;
+    z-index: 6;
+    overflow:hidden;
+    opacity: 0;
+    pointer-events:none;
+  }
+  .fx.on{ opacity: 1; }
+
+  .fx-frame{ position:absolute; inset:0; background:#0B0B0C; }
+
+  .fx-inner{
+    position:absolute; inset:4px;
+    border-radius: 6px;
+    background: #F2F2F0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap: 20px;
+    overflow:hidden;
+    /* 白黒がときどき反転する */
+    animation: fxInvert 2.2s steps(1) infinite;
+  }
+  @keyframes fxInvert{
+    0%, 62%{ filter: none; }
+    63%, 100%{ filter: invert(1); }
+  }
+
+  /* ---- 演出は線だけで組む ---- */
+
+  /* 集中線 */
+  .fx-rays{
+    position:absolute;
+    left:50%; top:50%;
+    width: 560px; height: 560px;
+    margin: -280px 0 0 -280px;
+    background: repeating-conic-gradient(from 0deg,
+      #0B0B0C 0deg 0.55deg, transparent 0.55deg 5deg);
+    opacity: 0.28;
+    animation: raySpin 26s linear infinite;
+  }
+  /* 中心はあけておく（文字を読ませるため） */
+  .fx-rays::after{
+    content:'';
+    position:absolute; inset: 33%;
+    border-radius: 50%;
+    background: #F2F2F0;
+  }
+  @keyframes raySpin{ to{ transform: rotate(360deg) } }
+
+  /* 広がる輪 */
+  .fx-ring{
+    position:absolute;
+    left:50%; top:50%;
+    width: 56px; height: 56px;
+    margin: -28px 0 0 -28px;
+    border: 2px solid #0B0B0C;
+    border-radius: 50%;
+    animation: ringOut 3.3s ease-out infinite;
+  }
+  .fx-ring.r2{ animation-delay: 1.1s; }
+  .fx-ring.r3{ animation-delay: 2.2s; }
+  @keyframes ringOut{
+    from{ transform: scale(.25); opacity: .9; }
+    to{ transform: scale(10); opacity: 0; }
+  }
+
+  /* 上下の罫線 */
+  .fx-rule{
+    position:absolute;
+    left: 0; right: 0;
+    height: 2px;
+    background: #0B0B0C;
+    animation: ruleWipe 0.8s cubic-bezier(.15,.9,.25,1) both;
+  }
+  .fx-rule.top{ top: 20px; }
+  .fx-rule.bot{ bottom: 20px; }
+  @keyframes ruleWipe{
+    from{ transform: scaleX(0); }
+    to{ transform: scaleX(1); }
+  }
+
+  .fx-text{
+    position: relative;
+    font-family: var(--reel-font);
+    font-weight: 900;
+    font-size: 74px;
+    line-height: 1;
+    letter-spacing: 2px;
+    color: #0B0B0C;
+    animation: fxTextIn 0.9s cubic-bezier(.2,.9,.25,1) both,
+               fxBreathe 5s ease-in-out 0.9s infinite;
+  }
+  /* 絵がある回（のびた・すねお）は少し小さく */
+  .fx.with-art .fx-text{ font-size: 52px; }
+  @keyframes fxTextIn{
+    from{ opacity: 0; letter-spacing: 44px; }
+    to{ opacity: 1; letter-spacing: 2px; }
+  }
+  @keyframes fxBreathe{
+    0%,100%{ transform: scale(1); }
+    50%{ transform: scale(1.04); }
+  }
+
+  .art{ position: relative; flex: 0 0 auto; }
+
+  /* ===== ひみつどうぐ（のびた・すねお） ===== */
+  .art.door{
+    width: 44px; height: 66px;
+    border-radius: 6px 6px 3px 3px;
+    background: #0B0B0C;
+    box-shadow: inset 0 0 0 3px #F2F2F0;
+    transform-origin: left center;
+    animation: doorOpen 4.4s ease-in-out infinite;
+  }
+  .art.door .knob{
+    position:absolute; right: 6px; top: 50%;
+    width: 8px; height: 8px; margin-top: -4px;
+    border-radius: 50%;
+    background: #F2F2F0;
+  }
+  @keyframes doorOpen{
+    0%,100%{ transform: perspective(220px) rotateY(0deg); }
+    50%{ transform: perspective(220px) rotateY(-62deg); }
+  }
+
+  .art.copter{ width: 56px; height: 52px; }
+  .art.copter .prop{
+    position:absolute; top: 4px; left: 50%;
+    width: 50px; height: 6px; margin-left: -25px;
+    border-radius: 3px;
+    background: #0B0B0C;
+    animation: propSpin .2s linear infinite;
+  }
+  .art.copter .stem{
+    position:absolute; top: 9px; left: 50%;
+    width: 5px; height: 15px; margin-left: -2.5px;
+    background: #0B0B0C;
+  }
+  .art.copter .cap{
+    position:absolute; top: 22px; left: 50%;
+    width: 36px; height: 22px; margin-left: -18px;
+    border-radius: 18px 18px 4px 4px;
+    background: #0B0B0C;
+  }
+  @keyframes propSpin{ to{ transform: rotateY(360deg); } }
+
+  .flashbang{
+    position:absolute; inset:0;
+    background:#fff;
+    opacity:0;
+    z-index: 9;
+    pointer-events:none;
+  }
+  .flashbang.go{ animation: flashOut 0.45s ease-out; }
+  @keyframes flashOut{ 0%{opacity:1} 100%{opacity:0} }
+
+  /* ============ 情報バー ============ */
+  .info-bar{
+    display:flex;
+    align-items:stretch;
+    gap: 8px;
+    height: 26px;
+    margin-bottom: 10px;
+  }
+  .gauge{
+    flex: 1 1 0;
+    border: 1px solid var(--ink);
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding: 0 8px;
+  }
+  .gauge-label{ font-size: 9px; letter-spacing: 1.5px; }
+  .gauge-value{ font-size: 14px; font-weight: 700; }
+  .sound-btn{
+    flex: 0 0 26px;
+    border: 1px solid var(--ink);
+    background: transparent;
+    color: var(--ink);
+    font-size: 12px;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+  }
+  .sound-btn.on{ background: var(--ink); color: var(--body); }
+
+  /* ============ リール ============ */
+  .reel-section{ display:flex; }
+  .screen-bezel{
+    flex: 1 1 0;
+    min-width: 0;
+    background: var(--screen);
+    border: 1px solid var(--ink);
+    padding: 9px;
+  }
+  .screen{ position: relative; }
+
+  /* 有効ライン：細い線と、両端の三角 */
+  .payline{
+    position:absolute;
+    left: 0; right: 0; top: 50%;
+    height: 2px;
+    transform: translateY(-1px);
+    background: var(--ink);
+    z-index: 5;
+    pointer-events:none;
+  }
+  .payline::before,
+  .payline::after{
+    content:'';
+    position:absolute; top: -4px;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+  }
+  .payline::before{ left: -9px;  border-left:  5px solid var(--paper); }
+  .payline::after{  right: -9px; border-right: 5px solid var(--paper); }
+
+  .reels{
+    display:flex;
+    gap: 3px;
+    width: 100%;
+  }
+  .reel-window{
+    flex: 1 1 0;
+    min-width: 0;
+    aspect-ratio: 3 / 5;
+    background: var(--screen);
+    position: relative;
+    overflow: hidden;
+  }
+  .reel-cylinder{
+    position: absolute;
+    inset: 0;
+    transform-style: preserve-3d;
+  }
+  .facet{
+    position: absolute;
+    left: 0; right: 0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-family: var(--reel-font);
+    font-weight: 900;
+    color: var(--ink);
+    background: #F2F2F0;
+    box-shadow: inset 0 -1px 0 rgba(23,23,26,0.18);
+    backface-visibility: hidden;
+    will-change: transform;
+  }
+  /* 回転中のブレ */
+  .reel-window.spinning .facet{ filter: blur(var(--spin-blur, 0px)); }
+  /* 上下の暗がり（ドラムの奥） */
+  .reel-window::before{
+    content:'';
+    position:absolute;
+    inset:0;
+    background: linear-gradient(180deg,
+      rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.32) 14%, rgba(0,0,0,0) 32%,
+      rgba(0,0,0,0) 68%, rgba(0,0,0,0.32) 86%, rgba(0,0,0,0.78) 100%);
+    pointer-events:none;
+    z-index: 3;
+  }
+  /* 揃ったときの枠 */
+  .reel-window::after{
+    content:'';
+    position:absolute;
+    left:0; right:0; top:33.3%; height:33.4%;
+    box-shadow: 0 0 0 0 rgba(23,23,26,0) inset;
+    transition: box-shadow .15s linear;
+    pointer-events:none;
+    z-index: 4;
+  }
+  .reel-window.flash::after{ box-shadow: 0 0 0 3px var(--ink) inset; }
+  .reel-window.thud{ animation: thud 0.16s ease-out; }
+  @keyframes thud{ 0%{ transform: translateY(0) } 45%{ transform: translateY(2px) } 100%{ transform: translateY(0) } }
+
+  /* ============ 操作パネル ============ */
+  .control-panel{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin-top: 10px;
+    padding: 13px 16px;
+    background: var(--panel);
+    border: 1px solid var(--ink);
+  }
+  .stop-row{
+    display:flex;
+    align-items:center;
+    gap: 18px;
+  }
+  .deck-btn{
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    border: 1.5px solid var(--ink);
+    background: transparent;
+    padding: 0;
+    cursor: default;
+    transition: background .08s linear, transform .06s linear;
+  }
+  .deck-btn.lit{ background: var(--ink); cursor: pointer; }
+  .deck-btn.lit:active{ transform: translateY(2px); }
+
+  .lever{
+    position: relative;
+    width: 30px; height: 74px;
+    border: none;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    display:flex;
+    align-items:flex-end;
+    justify-content:center;
+    touch-action: none;
+  }
+  .lever-base{
+    position:absolute; bottom: 0; left: 50%;
+    width: 22px; height: 4px; margin-left: -11px;
+    background: var(--ink);
+  }
+  .lever-rail{
+    width: 3px; height: 100%;
+    background: var(--ink);
+    position: relative;
+  }
+  .lever-knob{
+    position:absolute;
+    top: 0; left: 50%;
+    width: 21px; height: 21px;
+    border-radius: 50%;
+    background: var(--ink);
+    transform: translate(-50%, -50%);
+    transition: top 0.14s cubic-bezier(.4,-0.2,.5,1.4);
+  }
+  .lever.pulled .lever-knob{ top: 100%; transition-duration: 0.08s; }
+  .lever.disabled{ opacity: 0.28; cursor: default; }
+
+  @media (prefers-reduced-motion: reduce){
+    .art, .art *, .fx-text, .fx-rays, .fx-ring, .fx-rule,
+    .fx-inner, .crown-lamp{ animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+
+  <div class="machine" id="machine">
+
+    <div class="crown">
+      <span class="crown-lamp"></span>
+      <span class="crown-lamp"></span>
+      <span class="crown-lamp"></span>
+      <span class="crown-lamp"></span>
+      <span class="crown-lamp"></span>
+    </div>
+
+    <!-- 演出画面 -->
+    <div class="lcd" id="lcd">
+      <div class="lcd-layer" id="lcdMain">
+        <div class="lcd-word" id="lcdWord"></div>
+      </div>
+
+      <div class="fx" id="fx">
+        <div class="fx-frame"></div>
+        <div class="fx-inner" id="fxInner"></div>
+      </div>
+
+      <div class="flashbang" id="flash"></div>
+    </div>
+
+    <div class="info-bar">
+      <div class="gauge">
+        <span class="gauge-label">GAMES</span>
+        <span class="gauge-value" id="games">0</span>
+      </div>
+      <button class="sound-btn" id="soundBtn" aria-label="音のオンオフ">♪</button>
+    </div>
+
+    <div class="reel-section">
+      <div class="screen-bezel">
+        <div class="screen">
+          <div class="reels" id="reels"></div>
+          <div class="payline"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="control-panel">
+      <div class="stop-row">
+        <button class="deck-btn stop" id="btnLeft" aria-label="1文字目をとめる"></button>
+        <button class="deck-btn stop" id="btnMid" aria-label="2文字目をとめる"></button>
+        <button class="deck-btn stop" id="btnRight" aria-label="3文字目をとめる"></button>
+      </div>
+      <button class="lever" id="leverBtn" aria-label="レバーを引く">
+        <span class="lever-base"></span>
+        <span class="lever-rail"><span class="lever-knob"></span></span>
+      </button>
+    </div>
+  </div>
+
+</div>
+
+
+<script>
+const WORD_LENGTH = 3;
+
+/* =========================================================
+   リールに乗る文字：ひらがな全部（81文字）
+   清音46 + 濁音20 + 半濁音5 + 小さい文字10
+   ========================================================= */
+const KANA = [
+  "あ","い","う","え","お","か","き","く","け","こ","さ","し","す","せ","そ",
+  "た","ち","つ","て","と","な","に","ぬ","ね","の","は","ひ","ふ","へ","ほ",
+  "ま","み","む","め","も","や","ゆ","よ","ら","り","る","れ","ろ","わ","を","ん",
+  "が","ぎ","ぐ","げ","ご","ざ","じ","ず","ぜ","ぞ","だ","ぢ","づ","で","ど",
+  "ば","び","ぶ","べ","ぼ",
+  "ぱ","ぴ","ぷ","ぺ","ぽ",
+  "ぁ","ぃ","ぅ","ぇ","ぉ","っ","ゃ","ゅ","ょ","ゎ"
+];
+
+/* ことばの先頭に来ない文字は、1リール目（一番左）から外す */
+const NOT_FIRST = ["ぁ","ぃ","ぅ","ぇ","ぉ","っ","ゃ","ゅ","ょ","ゎ","ん"];
+const KANA_FIRST = KANA.filter(c => !NOT_FIRST.includes(c));
+const POOLS = [KANA_FIRST, KANA, KANA];
+
+/* =========================================================
+   演出が出ることば
+     art : のびた・すねお だけシルエットを出す。ほかは線と文字だけ。
+     snd : beep だけ検閲音、あとは共通のドローン
+   ========================================================= */
+const COMBOS = [
+  { word:"おしり" },
+  { word:"うんち" },
+  { word:"うんこ" },
+  { word:"おなら" },
+  { word:"ちんこ", snd:"beep" },
+  { word:"ちんぽ", snd:"beep" },
+  { word:"はなげ" },
+  { word:"わきげ" },
+  { word:"ちんげ", snd:"beep" },
+  { word:"ぱんつ" },
+  { word:"のびた", art:["copter","door"] },
+  { word:"すねお", art:["door","copter"] },
+  { word:"どらみ", art:["copter","copter"] }
+];
+COMBOS.forEach(c => { c.chars = [...c.word]; });
+
+/* 演出イラストのHTML（ひみつどうぐのみ） */
+const ART = {
+  door:   '<div class="art door"><span class="knob"></span></div>',
+  copter: '<div class="art copter"><span class="prop"></span><span class="stem"></span><span class="cap"></span></div>'
+};
+
+/* =========================================================
+   リール仕様
+   - 抽選も引き込みも蹴飛ばしもナシ。押したところで止まるだけ。
+   - 毎ゲーム、81文字から SAMPLE 文字をランダムに抜いて帯を組む。
+     どの文字が来る確率も 1/81 のまま、ドラムだけ短くなる。
+   ========================================================= */
+const SAMPLE      = 20;     // 1リールのコマ数
+const FACETS      = 14;     // ドラムの面数（描画用）
+const HALF        = FACETS / 2;
+const STEP        = 360 / FACETS;
+const MAX_SPEED   = 15.5;   // コマ/秒
+const ACCEL       = 46;     // コマ/秒^2
+const BRAKE_KOMA  = 1.7;    // 制動に使うコマ数
+const PERSP_K     = 4;      // 遠近感の強さ（perspective = 半径 × これ）
+
+const mod = (n, m) => ((n % m) + m) % m;
+const rand = arr => arr[Math.floor(Math.random() * arr.length)];
+const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
+
+/* =========================================================
+   効果音（WebAudioで合成）
+   ========================================================= */
+const Snd = {
+  ctx: null, master: null, noise: null, enabled: true, spin: null,
+
+  init(){
+    if (this.ctx) { if (this.ctx.state === "suspended") this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { this.enabled = false; return; }
+    this.ctx = new AC();
+    this.master = this.ctx.createGain();
+    this.master.gain.value = 0.5;
+    this.master.connect(this.ctx.destination);
+    const len = this.ctx.sampleRate * 1.2;
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    this.noise = buf;
+  },
+  get t(){ return this.ctx.currentTime; },
+  ok(){ return this.enabled && this.ctx; },
+
+  tone(freq, dur, type = "square", vol = 0.2, at = 0, slideTo = null){
+    if (!this.ok()) return;
+    const t0 = this.t + at;
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t0);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  },
+
+  burst(dur, freq, q, vol = 0.3, at = 0){
+    if (!this.ok()) return;
+    const t0 = this.t + at;
+    const s = this.ctx.createBufferSource();
+    s.buffer = this.noise;
+    const f = this.ctx.createBiquadFilter();
+    f.type = "bandpass"; f.frequency.value = freq; f.Q.value = q;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    s.connect(f); f.connect(g); g.connect(this.master);
+    s.start(t0); s.stop(t0 + dur + 0.02);
+  },
+
+  lever(){
+    this.init(); if (!this.ok()) return;
+    this.burst(0.14, 1600, 1.2, 0.35);
+    this.tone(160, 0.16, "square", 0.28, 0, 60);
+    this.tone(70, 0.22, "sine", 0.4, 0.02, 42);
+  },
+
+  clunk(){
+    if (!this.ok()) return;
+    this.burst(0.09, 900, 0.9, 0.35);
+    this.tone(150, 0.13, "triangle", 0.35, 0, 55);
+  },
+
+  spinStart(){
+    if (!this.ok() || this.spin) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noise; src.loop = true;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = "bandpass"; bp.frequency.value = 1100; bp.Q.value = 1.6;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, this.t);
+    g.gain.exponentialRampToValueAtTime(0.075, this.t + 0.25);
+    // コマが通過するカタカタ音（AM変調）
+    const lfo = this.ctx.createOscillator();
+    const lfoG = this.ctx.createGain();
+    lfo.type = "sawtooth"; lfo.frequency.value = MAX_SPEED;
+    lfoG.gain.value = 0.05;
+    lfo.connect(lfoG); lfoG.connect(g.gain);
+    src.connect(bp); bp.connect(g); g.connect(this.master);
+    src.start(); lfo.start();
+    this.spin = { src, g, lfo };
+  },
+  spinStop(){
+    if (!this.ok() || !this.spin) return;
+    const { src, g, lfo } = this.spin;
+    this.spin = null;
+    g.gain.cancelScheduledValues(this.t);
+    g.gain.setValueAtTime(Math.max(g.gain.value, 0.0001), this.t);
+    g.gain.exponentialRampToValueAtTime(0.0001, this.t + 0.12);
+    src.stop(this.t + 0.2); lfo.stop(this.t + 0.2);
+  },
+
+  /* 揃ったときの音。ファンファーレではなく、ずれた二音のうなり。 */
+  drone(){
+    if (!this.ok()) return;
+    this.tone(110, 5.5, "sine", 0.22, 0);
+    this.tone(113.5, 5.5, "sine", 0.22, 0);   // わずかにずらしてうならせる
+    this.tone(55, 5.5, "sine", 0.16, 0);
+    this.tone(1760, 2.6, "sine", 0.05, 0.15);
+    this.burst(0.2, 3000, 0.7, 0.12, 0);
+  },
+
+  /* ちんこ・ちんぽ：検閲のピー音 */
+  beep(){
+    if (!this.ok()) return;
+    this.tone(1000, 5.0, "sine", 0.2, 0);
+    this.tone(110, 5.0, "sine", 0.14, 0);
+  },
+
+  win(kind){
+    if (!this.ok()) return;
+    if (kind === "beep") this.beep();
+    else this.drone();
+  }
+};
+
+/* =========================================================
+   リール（3D円筒ドラム）
+   ========================================================= */
+class Reel {
+  constructor(el, symbols){
+    this.el = el;
+    this.cyl = el.querySelector(".reel-cylinder");
+    this.symbols = symbols;
+    this.facets = [];
+    for (let j = 0; j < FACETS; j++){
+      const f = document.createElement("span");
+      f.className = "facet";
+      this.cyl.appendChild(f);
+      this.facets.push({ el: f, idx: null, vis: true });
+    }
+    this.buildStrip();
+    /* 整数位置から始める。半端だと有効ラインでコマが半分に割れて見える */
+    this.pos = Math.floor(Math.random() * this.len);
+    this.speed = 0;
+    this.state = "idle";   // idle | accel | run | slide | brake | bounce
+    this.R = 100;
+  }
+
+  /* プールから SAMPLE 文字をランダムに抜いて帯にする。重みづけは一切なし。 */
+  buildStrip(){
+    const pool = this.symbols.slice();
+    const s = [];
+    while (s.length < SAMPLE && pool.length){
+      s.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+    }
+    this.strip = s;
+    this.len = s.length;
+    this.facets.forEach(f => { f.idx = null; });
+  }
+
+  setGeom(cell, R, font){
+    this.R = R;
+    this.el.style.perspective = (R * PERSP_K) + "px";
+    this.facets.forEach(f => {
+      f.el.style.height = cell + "px";
+      f.el.style.top = "calc(50% - " + (cell / 2) + "px)";
+      f.el.style.fontSize = font + "px";
+    });
+  }
+
+  charAt(absPos){ return this.strip[mod(Math.round(absPos), this.len)]; }
+  centerChar(){ return this.charAt(this.pos); }
+
+  /* 押した瞬間に「次に有効ラインへ来るコマ」 */
+  stopBase(){ return Math.ceil(this.pos + BRAKE_KOMA + 0.02); }
+
+  spinUp(){
+    this.state = "accel";
+    this.speed = 0;
+    this.el.classList.remove("flash", "thud");
+    this.el.classList.add("spinning");
+  }
+
+  commitStop(targetPos){
+    if (this.state !== "run" && this.state !== "accel") return;
+    this.stopTarget = targetPos;
+    this.state = "slide";
+  }
+
+  get running(){
+    return this.state !== "idle" && this.state !== "stopped" && this.state !== "bounce";
+  }
+  get stoppable(){ return this.state === "run"; }
+
+  update(dt){
+    switch (this.state){
+      case "accel":
+        this.speed = Math.min(MAX_SPEED, this.speed + ACCEL * dt);
+        this.pos += this.speed * dt;
+        if (this.speed >= MAX_SPEED) this.state = "run";
+        break;
+      case "run":
+        this.pos += this.speed * dt;
+        break;
+      case "slide":
+        this.pos += this.speed * dt;
+        if (this.pos >= this.stopTarget - BRAKE_KOMA){
+          this.brake = {
+            from: this.pos,
+            to: this.stopTarget,
+            dur: Math.max(0.16, 3 * (this.stopTarget - this.pos) / this.speed),
+            t: 0
+          };
+          this.state = "brake";
+        }
+        break;
+      case "brake": {
+        const b = this.brake;
+        b.t += dt;
+        const u = Math.min(1, b.t / b.dur);
+        this.pos = b.from + (b.to - b.from) * easeOutCubic(u);
+        this.speed = MAX_SPEED * (1 - u);
+        if (u >= 1){
+          this.pos = b.to;
+          this.speed = 0;
+          this.state = "bounce";
+          this.bounceT = 0;
+          this.el.classList.remove("spinning");
+          this.el.classList.add("thud");
+          Snd.clunk();
+          if (this.onStop) this.onStop(this);
+        }
+        break;
+      }
+      case "bounce": {
+        this.bounceT += dt;
+        const u = Math.min(1, this.bounceT / 0.2);
+        this.pos = this.stopTarget - 0.11 * Math.sin(Math.PI * u) * (1 - u);
+        if (u >= 1){ this.pos = this.stopTarget; this.state = "stopped"; }
+        break;
+      }
+    }
+    if (this.state === "accel" || this.state === "run" || this.state === "slide" || this.state === "brake"){
+      this.el.style.setProperty("--spin-blur", (this.speed / MAX_SPEED * 1.5).toFixed(2) + "px");
+    }
+  }
+
+  render(){
+    const k = Math.floor(this.pos);
+    const frac = this.pos - k;
+    for (let j = 0; j < FACETS; j++){
+      const rel = j - HALF;
+      const ang = (rel - frac) * STEP;
+      const f = this.facets[j];
+      if (Math.abs(ang) > 96){
+        if (f.vis){ f.el.style.visibility = "hidden"; f.vis = false; }
+        continue;
+      }
+      if (!f.vis){ f.el.style.visibility = "visible"; f.vis = true; }
+      const idx = mod(k + rel, this.len);
+      if (f.idx !== idx){
+        f.idx = idx;
+        f.el.textContent = this.strip[idx];
+      }
+      f.el.style.transform = "rotateX(" + ang.toFixed(2) + "deg) translateZ(" + this.R.toFixed(1) + "px)";
+    }
+  }
+}
+
+/* =========================================================
+   ゲーム本体
+   ========================================================= */
+const machine   = document.getElementById("machine");
+const reelsWrap = document.getElementById("reels");
+const lcd       = document.getElementById("lcd");
+const lcdMain   = document.getElementById("lcdMain");
+const lcdWord   = document.getElementById("lcdWord");
+const fxEl      = document.getElementById("fx");
+const fxInner   = document.getElementById("fxInner");
+const flashEl   = document.getElementById("flash");
+const leverBtn  = document.getElementById("leverBtn");
+const gamesEl   = document.getElementById("games");
+const soundBtn  = document.getElementById("soundBtn");
+const crownLamps = [...document.querySelectorAll(".crown-lamp")];
+const stopBtns  = [
+  document.getElementById("btnLeft"),
+  document.getElementById("btnMid"),
+  document.getElementById("btnRight")
+];
+
+let reels = [];
+let phase = "idle";   // idle | wait | spinning | result | jackpot
+let games = 0;
+let timers = [];
+
+function later(fn, ms){ const id = setTimeout(fn, ms); timers.push(id); return id; }
+function clearLater(){ timers.forEach(clearTimeout); timers = []; }
+
+/* ---- 構築 ---- */
+function build(){
+  reelsWrap.innerHTML = "";
+  reels = [];
+  for (let i = 0; i < WORD_LENGTH; i++){
+    const win = document.createElement("div");
+    win.className = "reel-window";
+    win.innerHTML = '<div class="reel-cylinder"></div>';
+    reelsWrap.appendChild(win);
+    const r = new Reel(win, POOLS[i]);
+    r.index = i;
+    r.onStop = onReelStopped;
+    reels.push(r);
+  }
+  layout();
+}
+
+/* リールの寸法。stage全体をscaleするので、拡大率を含まない
+   offsetWidth / offsetHeight で測る（getBoundingClientRectだと二重に効く） */
+function layout(){
+  const w = reels[0].el.offsetWidth;
+  const h = reels[0].el.offsetHeight;
+  if (!w) { requestAnimationFrame(layout); return; }
+  /* 手前の面は遠近法で PERSP_K/(PERSP_K-1) 倍に見える。
+     それを見込んでコマの高さを決めないと、拡大されて3コマ分が入らない */
+  const mag = PERSP_K / (PERSP_K - 1);
+  const cell = h / 3 / mag;
+  const R = (cell / 2) / Math.tan(Math.PI / FACETS);
+  const font = Math.min(cell * 0.86, w * 0.62);
+  reels.forEach(r => { r.setGeom(cell, R, font); r.render(); });
+}
+
+/* 画面にまるごと収まるよう stage を拡大縮小する */
+const stage = document.getElementById("stage");
+function fitToScreen(){
+  const vw = (window.visualViewport && window.visualViewport.width)  || window.innerWidth;
+  const vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+  const w = stage.offsetWidth, h = stage.offsetHeight;
+  if (!w || !h) return;
+  const s = Math.min(vw * 0.97 / w, vh * 0.98 / h, 1.6);
+  stage.style.transform = "scale(" + s.toFixed(4) + ")";
+}
+
+/* ---- メインループ ---- */
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  for (const r of reels){
+    if (r.state !== "idle" && r.state !== "stopped") r.update(dt);
+    r.render();
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ---- 表示まわり ---- */
+function setWord(chars){
+  lcdWord.innerHTML = "";
+  chars.forEach(c => {
+    const s = document.createElement("span");
+    s.textContent = c;
+    lcdWord.appendChild(s);
+  });
+}
+function setLamps(n){
+  crownLamps.forEach((l, i) => l.classList.toggle("on", i < n));
+}
+function updateGauges(){
+  gamesEl.textContent = games;
+}
+
+function setPhase(next){
+  phase = next;
+  const canStop = phase === "spinning";
+  leverBtn.classList.toggle("disabled", phase !== "idle");
+  leverBtn.classList.toggle("ready", phase === "idle");
+  stopBtns.forEach((b, i) => b.classList.toggle("lit", canStop && reels[i].stoppable));
+}
+function refreshStopLamps(){
+  stopBtns.forEach((b, i) => b.classList.toggle("lit", phase === "spinning" && reels[i].stoppable));
+}
+
+/* =========================================================
+   1ゲームの流れ
+   ========================================================= */
+function startRound(){
+  if (phase !== "idle") return;
+
+  clearLater();
+  Snd.init();
+  Snd.lever();
+  leverBtn.classList.add("pulled");
+  later(() => leverBtn.classList.remove("pulled"), 240);
+
+  games++;
+  updateGauges();
+
+  /* 毎ゲーム、帯を引き直す */
+  reels.forEach(r => { r.buildStrip(); r.spinUp(); });
+  machine.classList.remove("jackpot");
+  fxEl.classList.remove("on");
+  lcdMain.classList.remove("hidden");
+  setWord([]);
+  setLamps(0);
+  setPhase("wait");
+  Snd.spinStart();
+
+  /* ウェイト明け → 停止受付。演出も文字も一切なし */
+  later(() => { if (phase === "wait") setPhase("spinning"); }, 380);
+}
+
+function pressStop(i){
+  if (phase !== "spinning") return;
+  const reel = reels[i];
+  if (!reel.stoppable) return;
+  Snd.init();
+  /* すべりゼロ。押した瞬間に来ているコマでそのまま止まる */
+  reel.commitStop(reel.stopBase());
+  refreshStopLamps();
+}
+
+function onReelStopped(reel){
+  refreshStopLamps();
+  const stoppedCount = reels.filter(r => r.state === "bounce" || r.state === "stopped").length;
+  /* 3つ止まるまでは何も出さない */
+  if (stoppedCount < WORD_LENGTH) return;
+
+  Snd.spinStop();
+  const word = reels.map(r => r.centerChar());
+  setWord(word);
+  const hit = COMBOS.find(c => c.word === word.join(""));
+  if (hit){
+    later(() => jackpot(hit), 300);
+  } else {
+    setPhase("result");
+    setLamps(0);
+    later(() => setPhase("idle"), 700);
+  }
+}
+
+/* =========================================================
+   大当り演出
+   ========================================================= */
+function jackpot(combo){
+  setPhase("jackpot");
+
+  /* 揃ったことばで演出画面を組み立てる。
+     基本は線と文字だけ。のびた・すねお だけシルエットが付く。 */
+  const art = combo.art;
+  fxEl.className = "fx" + (art ? " with-art" : "");
+  fxInner.innerHTML =
+    '<div class="fx-rays"></div>' +
+    '<div class="fx-ring"></div><div class="fx-ring r2"></div><div class="fx-ring r3"></div>' +
+    '<div class="fx-rule top"></div><div class="fx-rule bot"></div>' +
+    (art ? ART[art[0]] : '') +
+    '<div class="fx-text">' + combo.word + '</div>' +
+    (art ? ART[art[1]] : '') +
+    '';
+
+  reels.forEach(r => r.el.classList.add("flash"));
+  machine.classList.add("jackpot");
+  flashEl.classList.remove("go");
+  void flashEl.offsetWidth;
+  flashEl.classList.add("go");
+  Snd.win(combo.snd);
+
+  later(() => {
+    lcdMain.classList.add("hidden");
+    fxEl.classList.add("on");
+  }, 200);
+
+  later(endJackpot, 6000);
+}
+
+function endJackpot(){
+  if (phase !== "jackpot") return;
+  clearLater();
+  fxEl.classList.remove("on");
+  machine.classList.remove("jackpot");
+  reels.forEach(r => r.el.classList.remove("flash"));
+  lcdMain.classList.remove("hidden");
+  setLamps(0);
+  setPhase("idle");
+}
+
+/* =========================================================
+   入力
+   ========================================================= */
+leverBtn.addEventListener("click", startRound);
+
+/* レバーをドラッグして引く */
+let dragY = null;
+leverBtn.addEventListener("pointerdown", e => {
+  if (phase !== "idle") return;
+  dragY = e.clientY;
+  leverBtn.setPointerCapture(e.pointerId);
+});
+leverBtn.addEventListener("pointermove", e => {
+  if (dragY === null) return;
+  if (e.clientY - dragY > 18){ dragY = null; startRound(); }
+});
+leverBtn.addEventListener("pointerup", () => { dragY = null; });
+
+stopBtns.forEach((btn, i) => btn.addEventListener("click", () => pressStop(i)));
+
+lcd.addEventListener("click", () => { if (phase === "jackpot") endJackpot(); });
+
+document.addEventListener("keydown", e => {
+  if (e.repeat) return;
+  const k = e.key.toLowerCase();
+  if (k === " " || k === "enter"){ e.preventDefault(); phase === "jackpot" ? endJackpot() : startRound(); }
+  if (k === "a" || k === "1") pressStop(0);
+  if (k === "s" || k === "2") pressStop(1);
+  if (k === "d" || k === "3") pressStop(2);
+});
+
+soundBtn.addEventListener("click", () => {
+  Snd.init();
+  Snd.enabled = !Snd.enabled;
+  soundBtn.classList.toggle("on", Snd.enabled);
+  if (Snd.master) Snd.master.gain.value = Snd.enabled ? 0.5 : 0;
+  if (!Snd.enabled) Snd.spinStop();
+});
+
+function onResize(){ layout(); fitToScreen(); }
+window.addEventListener("resize", onResize);
+window.addEventListener("orientationchange", onResize);
+if (window.visualViewport) window.visualViewport.addEventListener("resize", onResize);
+
+/* ---- 起動 ---- */
+build();
+updateGauges();
+setPhase("idle");
+soundBtn.classList.add("on");
+fitToScreen();
+/* フォントが後から読み込まれると高さが変わるので測り直す */
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(onResize);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -26,6 +26,7 @@
     font-family: var(--mono);
     color: var(--ink);
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;  /* ダブルタップでのズームを止める */
   }
   body{
     position: fixed;          /* iOSのゴムバウンドも止める */
@@ -400,10 +401,11 @@
 
   /* ============ 操作パネル ============ */
   .control-panel{
+    position: relative;
     display:flex;
     align-items:center;
     justify-content:center;
-    gap: 36px;
+    min-height: 100px;   /* 絶対配置のレバー(74px)がはみ出さない高さを確保 */
     margin-top: 10px;
     padding: 13px 16px;
     background: var(--panel);
@@ -415,6 +417,7 @@
     gap: 18px;
   }
   .deck-btn{
+    position: relative;
     width: 38px; height: 38px;
     border-radius: 50%;
     border: 1.5px solid var(--ink);
@@ -423,11 +426,20 @@
     cursor: default;
     transition: background .08s linear, transform .06s linear;
   }
+  /* 見た目の円はそのまま、当たり判定だけ一回り広げる（スマホ誤タップ対策） */
+  .deck-btn::before{
+    content: '';
+    position: absolute;
+    inset: -8px;
+  }
   .deck-btn.lit{ background: var(--ink); cursor: pointer; }
   .deck-btn.lit:active{ transform: translateY(2px); }
 
   .lever{
-    position: relative;
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    transform: translateY(-50%);
     width: 30px; height: 74px;
     border: none;
     background: transparent;
@@ -437,6 +449,13 @@
     align-items:flex-end;
     justify-content:center;
     touch-action: none;
+  }
+  /* 見た目の細いレバーはそのまま、当たり判定だけ一回り広げる */
+  .lever::before{
+    content: '';
+    position: absolute;
+    top: -10px; bottom: -10px;
+    left: -14px; right: -14px;
   }
   .lever-base{
     position:absolute; bottom: 0; left: 50%;
@@ -960,7 +979,7 @@ function updateGauges(){
 function setPhase(next){
   phase = next;
   const canStop = phase === "spinning";
-  leverBtn.classList.toggle("disabled", phase !== "idle");
+  leverBtn.classList.toggle("disabled", phase !== "idle" && phase !== "jackpot");
   leverBtn.classList.toggle("ready", phase === "idle");
   stopBtns.forEach((b, i) => b.classList.toggle("lit", canStop && reels[i].stoppable));
 }
@@ -972,7 +991,8 @@ function refreshStopLamps(){
    1ゲームの流れ
    ========================================================= */
 function startRound(){
-  if (phase !== "idle") return;
+  /* 大当り演出の最中でも、レバーを引けば演出を閉じて次のゲームを始める */
+  if (phase !== "idle" && phase !== "jackpot") return;
 
   clearLater();
   Snd.init();
@@ -1057,18 +1077,7 @@ function jackpot(combo){
     fxEl.classList.add("on");
   }, 200);
 
-  later(endJackpot, 6000);
-}
-
-function endJackpot(){
-  if (phase !== "jackpot") return;
-  clearLater();
-  fxEl.classList.remove("on");
-  machine.classList.remove("jackpot");
-  reels.forEach(r => r.el.classList.remove("flash"));
-  lcdMain.classList.remove("hidden");
-  setLamps(0);
-  setPhase("idle");
+  /* 自動では閉じない。次にレバーを引くまで演出を出したままにする */
 }
 
 /* =========================================================
@@ -1079,7 +1088,7 @@ leverBtn.addEventListener("click", startRound);
 /* レバーをドラッグして引く */
 let dragY = null;
 leverBtn.addEventListener("pointerdown", e => {
-  if (phase !== "idle") return;
+  if (phase !== "idle" && phase !== "jackpot") return;
   dragY = e.clientY;
   leverBtn.setPointerCapture(e.pointerId);
 });
@@ -1091,12 +1100,13 @@ leverBtn.addEventListener("pointerup", () => { dragY = null; });
 
 stopBtns.forEach((btn, i) => btn.addEventListener("click", () => pressStop(i)));
 
-lcd.addEventListener("click", () => { if (phase === "jackpot") endJackpot(); });
+/* 演出中に画面をクリックしても、次のゲームを始める（＝演出を閉じる）だけ */
+lcd.addEventListener("click", () => { if (phase === "jackpot") startRound(); });
 
 document.addEventListener("keydown", e => {
   if (e.repeat) return;
   const k = e.key.toLowerCase();
-  if (k === " " || k === "enter"){ e.preventDefault(); phase === "jackpot" ? endJackpot() : startRound(); }
+  if (k === " " || k === "enter"){ e.preventDefault(); startRound(); }
   if (k === "a" || k === "1") pressStop(0);
   if (k === "s" || k === "2") pressStop(1);
   if (k === "d" || k === "3") pressStop(2);

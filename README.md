@@ -1,3 +1,3 @@
 # hiragana-slot
 
-ひらがな3文字スロット。 https://slot.t-kaset.com/
+ひらがな3文字スロット。 https://hiraganaslot.t-kaset.com/

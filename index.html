@@ -563,7 +563,7 @@ const KANA = [
 ];
 
 /* ことばの先頭に来ない文字は、1リール目（一番左）から外す */
-const NOT_FIRST = ["ぁ","ぃ","ぅ","ぇ","ぉ","っ","ゃ","ゅ","ょ","ゎ","ん"];
+const NOT_FIRST = ["ぁ","ぃ","ぅ","ぇ","ぉ","っ","ゃ","ゅ","ょ","ゎ","ん","を"];
 const KANA_FIRST = KANA.filter(c => !NOT_FIRST.includes(c));
 const POOLS = [KANA_FIRST, KANA, KANA];
 
